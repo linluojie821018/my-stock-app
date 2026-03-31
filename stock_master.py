@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # 1. 頁面基礎設定
-st.set_page_config(page_title="AI 股市戰情室", layout="wide")
+st.set_page_config(page_title="AI 股市戰情室", layout="wide", initial_sidebar_state="collapsed")
 
 # --- 輔助函式：單位轉換 ---
 def format_vol_unit(vol):
@@ -55,12 +55,11 @@ def get_stock_data(symbol, interval="1d"):
     else:
         return fetch_api(symbol), symbol
 
-# --- 側邊欄：優化為選股指標指南 ---
+# --- 側邊欄 ---
 with st.sidebar:
     st.title("🌐 全球股票搜尋")
     stock_input = st.text_input("輸入代碼 (如: 2330, NVDA)", value="2330").strip().upper()
     st.divider()
-    # 替換為選股指標說明
     st.write("🎯 **漏斗式選股指標**")
     with st.expander("第一層：流動性", expanded=True):
         st.caption("● 成交量 > 1,000張\n● 確保買得到、賣得掉")
@@ -82,7 +81,7 @@ if not df_main.empty:
     avg_v = float(df_main['Volume'].mean())
     ma20_now = df_main['MA20'].iloc[-1] if 'MA20' in df_main else 0
 
-    # 綜合評分邏輯
+    # 綜合評分
     score = 0
     if latest_c > open_p: score += 40
     if last_v > avg_v: score += 40
@@ -103,21 +102,24 @@ if not df_main.empty:
 
     with col_txt:
         st.write("### 📋 投資診斷報告")
-        # 新增白話建議邏輯
-        if score >= 80:
-            st.success("**【極力推薦】現正處於多頭攻擊態勢！** 價格站穩開盤且有量能支撐，月線位階安全，是理想的切入時機。")
-        elif score >= 60:
-            st.warning("**【適合小量試單】目前處於震盪偏多局面。** 有動能但尚未全面爆發，建議等突破壓力位後再加碼。")
-        elif score >= 40:
-            st.info("**【保守觀望】趨勢不明朗，不建議急著進場。** 目前多空拉鋸，建議等股價回檔支撐位且量縮止跌再考慮。")
-        else:
-            st.error("**【嚴禁接刀】目前空方勢力強大。** 股價跌破開盤且低於月線，下方支撐尚未站穩，切勿貿然進場。")
+        if score >= 80: st.success("**【極力推薦】現正處於多頭攻擊態勢！** 價格站穩開盤且有量能支撐，位階安全。")
+        elif score >= 60: st.warning("**【適合小量試單】目前處於震盪偏多局面。** 有動能但尚未全面爆發。")
+        elif score >= 40: st.info("**【保守觀望】趨勢不明朗，不建議急著進場。** 建議等回檔支撐位再考慮。")
+        else: st.error("**【嚴禁接刀】目前空方勢力強大。** 股價跌破開盤且低於月線，切勿貿然進場。")
         
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("市價", f"{latest_c:.2f}")
         c2.metric("漲跌幅", f"{((latest_c-open_p)/open_p)*100:.2f}%")
-        c3.metric("本益比 (PE)", f"{fundamentals['PE'] if isinstance(fundamentals['PE'], (int, float)) else 'N/A':.2f}")
-        c4.metric("股價淨值 (PB)", f"{fundamentals['PB'] if isinstance(fundamentals['PB'], (int, float)) else 'N/A':.2f}")
+        
+        # --- 這裡就是修正的地方：判斷是否為數字才進行格式化 ---
+        pe_val = fundamentals['PE']
+        pe_display = f"{pe_val:.2f}" if isinstance(pe_val, (int, float)) else "N/A"
+        
+        pb_val = fundamentals['PB']
+        pb_display = f"{pb_val:.2f}" if isinstance(pb_val, (int, float)) else "N/A"
+        
+        c3.metric("本益比 (PE)", pe_display)
+        c4.metric("股價淨值 (PB)", pb_display)
 
     st.divider()
 
@@ -127,14 +129,11 @@ if not df_main.empty:
         st.subheader("⚡️ 當沖/基本面評估")
         trend_status = "🔴 偏多勢" if latest_c > open_p else "🟢 偏空勢"
         st.info(f"今日趨勢：{trend_status} | 開盤參考：{open_p:.2f}")
-        
         roe_val = f"{fundamentals['ROE']*100:.1f}%" if isinstance(fundamentals['ROE'], (int, float)) else "N/A"
         st.write(f"**基本面體檢：** ROE {roe_val}")
-        
         disp_df = df_main[['Open', 'High', 'Low', 'Close', 'Volume']].tail(5).copy()
         disp_df['Volume'] = disp_df['Volume'].apply(format_vol_unit)
         st.dataframe(disp_df, use_container_width=True)
-        
         st.markdown("🚩 **位階建議**")
         st.write(f"📈 建議支撐：{latest_c*0.98:.2f}")
         st.write(f"📉 建議壓力：{latest_c*1.03:.2f}")
@@ -143,7 +142,6 @@ if not df_main.empty:
         st.subheader("🎯 Yahoo 風格 K 線圖")
         t_unit = st.radio("切換週期：", ["5m", "15m", "30m", "60m", "1d", "1wk", "1mo"], index=4, horizontal=True)
         plot_df = df_main if t_unit == "1d" else get_stock_data(stock_input, interval=t_unit)[0]
-        
         if not plot_df.empty:
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
             fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name="K線", increasing_line_color='#FF4B4B', decreasing_line_color='#00B050'), row=1, col=1)
@@ -153,3 +151,5 @@ if not df_main.empty:
             fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], marker_color=v_colors, opacity=0.8), row=2, col=1)
             fig.update_layout(height=500, margin=dict(l=0, r=0, b=0, t=0), template="plotly_white", xaxis_rangeslider_visible=False, dragmode='pan', hovermode='x unified', showlegend=False)
             st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
+else:
+    st.error("❌ 無法抓取該代碼數據。")
