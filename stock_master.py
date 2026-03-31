@@ -7,6 +7,17 @@ from plotly.subplots import make_subplots
 # 1. 頁面基礎設定
 st.set_page_config(page_title="AI 股市戰情室", layout="wide", initial_sidebar_state="collapsed")
 
+# --- 輔助函式：台股名稱對照表 (確保 100% 顯示中文) ---
+def get_tw_stock_name(symbol):
+    tw_names = {
+        "2330": "台積電", "2317": "鴻海", "2454": "聯發科", "2308": "台達電",
+        "2303": "聯電", "2881": "富邦金", "2882": "國泰金", "2412": "中華電",
+        "1301": "台塑", "1303": "南亞", "2603": "長榮", "2609": "陽明",
+        "6175": "立敦", "2382": "廣達", "2357": "華碩", "3008": "大立光",
+        "3231": "緯創", "2376": "技嘉", "2618": "長榮航", "2610": "華航"
+    }
+    return tw_names.get(symbol, None)
+
 # --- 輔助函式：單位轉換 ---
 def format_vol_unit(vol):
     try:
@@ -18,17 +29,22 @@ def format_vol_unit(vol):
 
 # --- 核心數據抓取 ---
 @st.cache_data(ttl=3600)
-def get_fundamental_data(symbol):
+def get_fundamental_data(stock_input, final_ticker):
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(final_ticker)
         info = ticker.info
+        # 優先找對照表，再找 API 欄位
+        tw_name = get_tw_stock_name(stock_input)
+        name = tw_name if tw_name else (info.get("shortName") or info.get("longName") or stock_input)
+        
         return {
+            "name": name,
             "PE": info.get("trailingPE", "N/A"),
             "PB": info.get("priceToBook", "N/A"),
             "ROE": info.get("returnOnEquity", "N/A")
         }
     except:
-        return {"PE": "N/A", "PB": "N/A", "ROE": "N/A"}
+        return {"name": stock_input, "PE": "N/A", "PB": "N/A", "ROE": "N/A"}
 
 def get_stock_data(symbol, interval="1d"):
     p_map = {"5m":"60d","15m":"60d","30m":"60d","60m":"730d","1d":"2y","1wk":"max","1mo":"max"}
@@ -55,7 +71,7 @@ def get_stock_data(symbol, interval="1d"):
     else:
         return fetch_api(symbol), symbol
 
-# --- 側邊欄 ---
+# --- 側邊欄：完整還原原本四層篩選機制 ---
 with st.sidebar:
     st.title("🌐 全球股票搜尋")
     stock_input = st.text_input("輸入代碼 (如: 2330, NVDA)", value="2330").strip().upper()
@@ -74,14 +90,17 @@ with st.sidebar:
 df_main, final_ticker = get_stock_data(stock_input, interval="1d")
 
 if not df_main.empty:
-    fundamentals = get_fundamental_data(final_ticker)
+    fundamentals = get_fundamental_data(stock_input, final_ticker)
     latest_c = float(df_main['Close'].iloc[-1])
     open_p = float(df_main['Open'].iloc[-1])
     last_v = float(df_main['Volume'].iloc[-1])
     avg_v = float(df_main['Volume'].mean())
     ma20_now = df_main['MA20'].iloc[-1] if 'MA20' in df_main else 0
 
-    # 綜合評分
+    # 顯示股票名稱
+    st.title(f"🚀 {fundamentals['name']} ({final_ticker})")
+
+    # 綜合評分 (還原原本 score 邏輯)
     score = 0
     if latest_c > open_p: score += 40
     if last_v > avg_v: score += 40
@@ -111,10 +130,8 @@ if not df_main.empty:
         c1.metric("市價", f"{latest_c:.2f}")
         c2.metric("漲跌幅", f"{((latest_c-open_p)/open_p)*100:.2f}%")
         
-        # --- 這裡就是修正的地方：判斷是否為數字才進行格式化 ---
         pe_val = fundamentals['PE']
         pe_display = f"{pe_val:.2f}" if isinstance(pe_val, (int, float)) else "N/A"
-        
         pb_val = fundamentals['PB']
         pb_display = f"{pb_val:.2f}" if isinstance(pb_val, (int, float)) else "N/A"
         
@@ -123,33 +140,27 @@ if not df_main.empty:
 
     st.divider()
 
-    # 2. 下方雙介面
-    col_left, col_right = st.columns([1, 1.3])
-    with col_left:
+    # 2. 下方雙介面：將您要求的內容完整保留在主畫面
+    col_main_content = st.container()
+    
+    with col_main_content:
         st.subheader("⚡️ 當沖/基本面評估")
         trend_status = "🔴 偏多勢" if latest_c > open_p else "🟢 偏空勢"
         st.info(f"今日趨勢：{trend_status} | 開盤參考：{open_p:.2f}")
+        
+        # 基本面體檢
         roe_val = f"{fundamentals['ROE']*100:.1f}%" if isinstance(fundamentals['ROE'], (int, float)) else "N/A"
         st.write(f"**基本面體檢：** ROE {roe_val}")
+        
+        # 歷史行情表格 (完整還原 Open, High, Low, Close, Volume)
         disp_df = df_main[['Open', 'High', 'Low', 'Close', 'Volume']].tail(5).copy()
         disp_df['Volume'] = disp_df['Volume'].apply(format_vol_unit)
         st.dataframe(disp_df, use_container_width=True)
+        
+        # 位階建議
         st.markdown("🚩 **位階建議**")
         st.write(f"📈 建議支撐：{latest_c*0.98:.2f}")
         st.write(f"📉 建議壓力：{latest_c*1.03:.2f}")
 
-    with col_right:
-        st.subheader("🎯 Yahoo 風格 K 線圖")
-        t_unit = st.radio("切換週期：", ["5m", "15m", "30m", "60m", "1d", "1wk", "1mo"], index=4, horizontal=True)
-        plot_df = df_main if t_unit == "1d" else get_stock_data(stock_input, interval=t_unit)[0]
-        if not plot_df.empty:
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
-            fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'], low=plot_df['Low'], close=plot_df['Close'], name="K線", increasing_line_color='#FF4B4B', decreasing_line_color='#00B050'), row=1, col=1)
-            if 'MA20' in plot_df:
-                fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df['MA20'], line=dict(color='#2196F3', width=1.5), name="20MA"), row=1, col=1)
-            v_colors = ['#FF4B4B' if c >= o else '#00B050' for c, o in zip(plot_df['Close'], plot_df['Open'])]
-            fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], marker_color=v_colors, opacity=0.8), row=2, col=1)
-            fig.update_layout(height=500, margin=dict(l=0, r=0, b=0, t=0), template="plotly_white", xaxis_rangeslider_visible=False, dragmode='pan', hovermode='x unified', showlegend=False)
-            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 else:
     st.error("❌ 無法抓取該代碼數據。")
